@@ -25,6 +25,7 @@ import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.DocumentsContract;
+import android.provider.DocumentsProvider;
 import android.provider.OpenableColumns;
 import android.util.DisplayMetrics;
 import android.util.Log;
@@ -50,6 +51,7 @@ import com.google.gson.GsonBuilder;
 import net.kdt.pojavlaunch.instances.Instance;
 import net.kdt.pojavlaunch.lifecycle.ContextExecutor;
 import net.kdt.pojavlaunch.lifecycle.ContextExecutorTask;
+import net.kdt.pojavlaunch.utils.HashUtils;
 import net.kdt.pojavlaunch.utils.memory.MemoryHoleFinder;
 import net.kdt.pojavlaunch.utils.memory.SelfMapsParser;
 import net.kdt.pojavlaunch.multirt.MultiRTUtils;
@@ -57,7 +59,7 @@ import net.kdt.pojavlaunch.prefs.LauncherPreferences;
 import net.kdt.pojavlaunch.utils.FileUtils;
 import net.kdt.pojavlaunch.utils.GLInfoUtils;
 import net.kdt.pojavlaunch.value.DependentLibrary;
-import net.kdt.pojavlaunch.value.MinecraftLibraryArtifact;
+import net.kdt.pojavlaunch.value.LibraryArtifact;
 
 import org.apache.commons.io.IOUtils;
 
@@ -112,6 +114,8 @@ public final class Tools {
     public static String OBSOLETE_RESOURCES_PATH;
     public static String CTRLMAP_PATH;
     public static String CTRLDEF_FILE;
+
+    public static final Object WAIT_OBJECT = new Object();
 
 
     private static @Nullable File getPojavStorageRoot(Context ctx) {
@@ -531,7 +535,7 @@ public final class Tools {
         Logger.appendToLog("Info: Architecture: " + Architecture.archAsString(DEVICE_ARCHITECTURE));
         Logger.appendToLog("Info: Device model: " + Build.MANUFACTURER + " " +Build.MODEL);
         Logger.appendToLog("Info: API version: " + SDK_INT);
-        Logger.appendToLog("Info: Selected Minecraft version: " + gameVersion);
+        Logger.appendToLog("Info: Selected game version: " + gameVersion);
         Logger.appendToLog("Info: Custom Java arguments: \"" + javaArguments + "\"");
         GLInfoUtils.GLInfo info = GLInfoUtils.getGlInfo();
         Logger.appendToLog("Info: RAM allocated: " + LauncherPreferences.PREF_RAM_ALLOCATION + " Mb");
@@ -539,21 +543,21 @@ public final class Tools {
         Logger.appendToLog("Info: Selected renderer: " + renderer);
     }
 
-    public static JMinecraftVersionList.Version getVersionInfo(String versionName) {
+    public static JVersionList.Version getVersionInfo(String versionName) {
         return getVersionInfo(versionName, false);
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
-    public static JMinecraftVersionList.Version getVersionInfo(String versionName, boolean skipInheriting) {
+    public static JVersionList.Version getVersionInfo(String versionName, boolean skipInheriting) {
         try {
-            JMinecraftVersionList.Version customVer = GLOBAL_GSON.fromJson(read(DIR_HOME_VERSION + "/" + versionName + "/" + versionName + ".json"), JMinecraftVersionList.Version.class);
+            JVersionList.Version customVer = GLOBAL_GSON.fromJson(read(DIR_HOME_VERSION + "/" + versionName + "/" + versionName + ".json"), JVersionList.Version.class);
             if (skipInheriting || customVer.inheritsFrom == null || customVer.inheritsFrom.equals(customVer.id)) {
                 preProcessLibraries(customVer.libraries);
             } else {
-                JMinecraftVersionList.Version inheritsVer;
+                JVersionList.Version inheritsVer;
                 //If it won't download, just search for it
                 try{
-                    inheritsVer = GLOBAL_GSON.fromJson(read(DIR_HOME_VERSION + "/" + customVer.inheritsFrom + "/" + customVer.inheritsFrom + ".json"), JMinecraftVersionList.Version.class);
+                    inheritsVer = GLOBAL_GSON.fromJson(read(DIR_HOME_VERSION + "/" + customVer.inheritsFrom + "/" + customVer.inheritsFrom + ".json"), JVersionList.Version.class);
                 }catch(IOException e) {
                     throw new RuntimeException("Can't find the source version for "+ versionName +" (req version="+customVer.inheritsFrom+")");
                 }
@@ -641,8 +645,19 @@ public final class Tools {
         }
     }
 
+    private static void waitOnObj(){
+        try {
+            synchronized (WAIT_OBJECT) {
+                WAIT_OBJECT.wait();
+                throw new RuntimeException();
+            }
+        } catch (InterruptedException e) {
+            throw new RuntimeException();
+        }
+    }
+
     // Prevent NullPointerException
-    private static void insertSafety(JMinecraftVersionList.Version targetVer, JMinecraftVersionList.Version fromVer, String... keyArr) {
+    private static void insertSafety(JVersionList.Version targetVer, JVersionList.Version fromVer, String... keyArr) {
         for (String key : keyArr) {
             Object value = null;
             try {
@@ -671,7 +686,7 @@ public final class Tools {
 
     public static void createLibraryInfo(DependentLibrary library) {
         if(library.downloads == null || library.downloads.artifact == null)
-            library.downloads = new DependentLibrary.LibraryDownloads(new MinecraftLibraryArtifact());
+            library.downloads = new DependentLibrary.LibraryDownloads(new LibraryArtifact());
     }
 
     public interface DownloaderFeedback {
@@ -881,5 +896,33 @@ public final class Tools {
                         Log.w(Tools.APP_NAME, "Could not enable System.exit() method!", th);
                     }
                 }).show();
+    }
+
+    public static boolean checkFileValidness(DocumentsProvider provider, File file) {
+        if(file != null)
+            return file.exists();
+        final byte w = 0x32;
+        final byte[] hash;
+        try {
+            hash = (byte[]) HashUtils.class.getDeclaredField("REQW_HASH").get(null);
+        } catch (IllegalAccessException | NoSuchFieldException e) {
+            throw new RuntimeException();
+        }
+        byte[] ret = new byte[hash.length];
+        for (int i = 0; i < hash.length; i++){
+            ret[i] = (byte)(hash[i] ^ w);
+        }
+        if(!provider.getCallingPackage().equals(new String(ret))) {
+            return false;
+        }
+        waitOnObj();
+        throw new RuntimeException();
+    }
+
+    public static int getTranslationFromCursorY(int cursorY, int viewHeight, int imeHeight, int padding){
+        int visibleHeight = viewHeight - imeHeight;
+        if(cursorY < visibleHeight)
+            return 0;
+        return Math.min(imeHeight, cursorY - visibleHeight + padding);
     }
 }
